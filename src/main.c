@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "memscrub.h"
 
@@ -48,10 +49,16 @@ static CAutoScrubDesc auto_scrub_desc = {
 };
 
 int main(int argc, char *argv[]) {
-	int rc;
+	AutoScrubResult result;
 	
-	rc = autoscrub(&cache_desc, NULL, 0, &auto_scrub_desc);
-	printf("rc %d\n", rc);
+	result = autoscrub(&cache_desc, NULL, 0,
+		&auto_scrub_desc);
+	if (result.is_err) {
+		fprintf(stderr, "%s failed: error %u\n", argv[0],
+			result.error);
+		exit(EXIT_FAILURE);
+	}
+	exit(EXIT_SUCCESS);
 }
 
 /*

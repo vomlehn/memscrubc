@@ -1,6 +1,7 @@
 // For instantiating architecture-specfic objects for the memory scrubbing
 // code
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -41,5 +42,11 @@ enum AutoScrubError {
     IteratorFailed,
 };
 
-enum AutoScrubError autoscrub(CCacheDesc *cache_desc, ScrubArea scrub_areas[],
+typedef struct {
+	bool	is_err;
+	int	error;
+} AutoScrubResult;
+
+
+AutoScrubResult autoscrub(CCacheDesc *cache_desc, ScrubArea scrub_areas[],
 	size_t n_scrub_areas, CAutoScrubDesc *auto_scrub_desc); 
