@@ -5,10 +5,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Cache description
+#if 0 // FIXME: revert this
 #define CACHE_INDEX_WIDTH	10
 #define CACHELINE_ITEMS		8
 
 typedef uint64_t ECCData;
+#else
+#define CACHE_INDEX_WIDTH	2
+#define CACHELINE_ITEMS		8
+
+typedef uint64_t ECCData;
+#endif
+
 typedef struct {
 	ECCData data[CACHELINE_ITEMS];
 } Cacheline;

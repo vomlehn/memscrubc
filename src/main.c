@@ -6,6 +6,33 @@
 
 #define ARRAY_SIZE(_a)	(sizeof(_a) / sizeof((_a)[0]))
 
+#ifdef TEST
+// Specify the parameters of the scrub
+// BYTES_TO_SCRUB	Total number of bytes being scrubbed
+// SCRUB_INCREMENT	Number of bytes scrubbed at a time
+// scrub_sizes		Array of sizes, in bytes, of memory areas to scrub
+#if 0		// FIXME: revert this
+#define BYTES_TO_SCRUB		(5 * sizeof(Cacheline))
+#define SCRUB_INCREMENT		(2 * sizeof(Cacheline))
+
+static size_t scrub_sizes[] = {512 * 1024 * 1024, 3 * 512 * 1024 * 1024};
+#else
+#define BYTES_TO_SCRUB		(101 * sizeof(Cacheline))
+#define SCRUB_INCREMENT		(3 * sizeof(Cacheline))
+
+static size_t scrub_sizes[] = {
+	2 *  sizeof(Cacheline),
+	3 *  sizeof(Cacheline),
+	1 * sizeof(Cacheline),
+	31 * sizeof(Cacheline),
+};
+#endif
+
+static void test_autoscrub(const char *name);
+
+static size_t read_count;
+static size_t scrub_count;
+
 static size_t cacheline_width(const CCacheDesc *me) {
 	return me->cl_width;
 }
@@ -20,10 +47,8 @@ static size_t cache_index_width(const CCacheDesc *me) {
 
 static void read_cacheline(CCacheDesc *me, Cacheline *cacheline) {
 	volatile ECCData *p = &cacheline->data[0];
-printf("probing %p\n", p);
-	*(volatile char *)p = 0;
-printf(" probe done\n");
 	(void)*p;
+	read_count++;
 }
 
 static size_t size_in_cachelines(const CCacheDesc *me,
@@ -32,7 +57,7 @@ static size_t size_in_cachelines(const CCacheDesc *me,
 		me->c_cacheline_width(me);
 	uintptr_t end = ((uintptr_t)scrub_area->end) >>
 		me->c_cacheline_width(me);
-	return start - end + 1;
+	return end - start + 1;
 }
 
 static size_t cache_index(const CCacheDesc *me, const uint8_t *p) {
@@ -60,28 +85,33 @@ typedef struct {
 static size_t next(CAutoScrubDesc *me) {
 	size_t cur_count;
 	size_t delta;
-	const size_t decrement = 2 * sizeof(Cacheline);
+	const size_t increment = SCRUB_INCREMENT;
 	size_t offset = offsetof(TestAutoScrubDesc, auto_scrub_desc);
 	TestAutoScrubDesc *test_auto_scrub_desc;
 	char *test_auto_scrub_desc_p = ((char *)me - offset);
        	test_auto_scrub_desc = (TestAutoScrubDesc *)test_auto_scrub_desc_p;
 
 	cur_count = test_auto_scrub_desc->count;
-	delta = cur_count > decrement ? decrement : cur_count;
+	delta = cur_count > increment ? increment : cur_count;
 	test_auto_scrub_desc->count -= delta;
-printf("next: me %p cur_count %zu delta %zu\n", me, test_auto_scrub_desc->count, delta);
+
+	size_t cacheline_width = cache_desc.c_cacheline_width(&cache_desc);
+	scrub_count += delta >> cacheline_width;
 
 	return delta;
 };
 
 static TestAutoScrubDesc test_auto_scrub_desc = {
-	.count = 5 * sizeof(Cacheline),
+	.count = BYTES_TO_SCRUB,
 	.auto_scrub_desc = {
 		.next = next,
 		.me = &test_auto_scrub_desc.auto_scrub_desc,
 	},
 };
 
+// Allocate a memory, aligning it on a cache line size boundary
+//
+// Returns: A ScrubArea
 static ScrubArea alloc_mem(size_t size) {
 	ScrubArea scrub_area;
 	void *p;
@@ -92,45 +122,63 @@ static ScrubArea alloc_mem(size_t size) {
 		exit(EXIT_FAILURE);
 	}
 
-printf("alloc_mem at %p\n", p);
 	p = (void *)(((uintptr_t)p + sizeof(Cacheline) - 1) &
 		~(sizeof(Cacheline) - 1));
-printf("alloc_mem at %p\n", p);
 	scrub_area.start = p;
 	scrub_area.end = p + (size - 1);
-printf("probing %p\n", p);
 	*(volatile char *)p = 0;
-printf(" probe done\n");
 	return scrub_area;
 }
 
-int main(int argc, char *argv[]) {
+static void test_autoscrub(const char *name) {
 	AutoScrubResult result;
 	CAutoScrubDesc *auto_scrub_desc;
-	ScrubArea scrub_areas[1];
+	ScrubArea scrub_areas[ARRAY_SIZE(scrub_sizes)];
+	size_t i;
 
-	size_t size = 2000 * sizeof(Cacheline);
-	scrub_areas[0] = alloc_mem(size);
+	// Allocate memory
+	for (i = 0; i < ARRAY_SIZE(scrub_areas); i++) {
+		scrub_areas[i] = alloc_mem(scrub_sizes[i]);
+	}
 	
 	auto_scrub_desc = &test_auto_scrub_desc.auto_scrub_desc;
-	printf("cache_desc %p\n", &cache_desc);
-	printf("cache_desc.cl_width %zu\n", cache_desc.cl_width);
-	printf("scrub_areas [");
-	size_t i;
-	const char *sep = "";
+	printf("scrub_areas [\n"); 
+
+	// Print the areas to be scrubbed
 	for (i = 0; i < ARRAY_SIZE(scrub_areas); i++) {
-		printf("%s%p-%p", sep, scrub_areas[i].start, scrub_areas[i].end);
-		sep = ", ";
+		ScrubArea *scrub_area;
+		scrub_area = &scrub_areas[i];
+		printf("\t%p-%p: %zu\n", scrub_area->start,
+			scrub_area->end,
+			cache_desc.c_size_in_cachelines(&cache_desc,
+				scrub_area));
 	}
 	printf("]\n");
+	fflush(stdout);
 
-	printf("auto_scrub_desc %p\n", auto_scrub_desc);
 	result = autoscrub(&cache_desc, scrub_areas, ARRAY_SIZE(scrub_areas),
 		auto_scrub_desc);
 	if (result.is_err) {
-		fprintf(stderr, "%s failed: error %u\n", argv[0],
+		fprintf(stderr, "%s failed: error %u\n", name,
 			result.error);
 		exit(EXIT_FAILURE);
 	}
-	exit(EXIT_SUCCESS);
+
+	printf("scrub_count %zu read_count %zu\n", scrub_count, read_count);
+	if (scrub_count != read_count) {
+		fprintf(stderr, "scrub_count != read_count\n");
+		exit(EXIT_FAILURE);
+	}
+}
+#endif
+
+int main(int argc, char *argv[]) {
+#ifdef TEST
+	test_autoscrub(argv[0]);
+#else
+	fprintf(stderr, "%s: TEST is not #defined\n", argv[0]);
+	exit(EXIT_FAILURE);
+#endif
+
+	return EXIT_SUCCESS;
 }
