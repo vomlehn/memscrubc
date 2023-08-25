@@ -11,9 +11,9 @@
 // BYTES_TO_SCRUB	Total number of bytes being scrubbed
 // SCRUB_INCREMENT	Number of bytes scrubbed at a time
 // scrub_sizes		Array of sizes, in bytes, of memory areas to scrub
-#if 0		// FIXME: revert this
-#define BYTES_TO_SCRUB		(5 * sizeof(Cacheline))
-#define SCRUB_INCREMENT		(2 * sizeof(Cacheline))
+#if 1		// FIXME: revert this
+#define BYTES_TO_SCRUB		(30ull * 1024 * 1024 * 1024)
+#define SCRUB_INCREMENT		(1ull * 1024 * 1024)
 
 static size_t scrub_sizes[] = {512 * 1024 * 1024, 3 * 512 * 1024 * 1024};
 #else
@@ -134,7 +134,10 @@ static void test_autoscrub(const char *name) {
 	AutoScrubResult result;
 	CAutoScrubDesc *auto_scrub_desc;
 	ScrubArea scrub_areas[ARRAY_SIZE(scrub_sizes)];
+	size_t cacheline_width;
 	size_t i;
+
+	cacheline_width = cache_desc.c_cacheline_width(&cache_desc);
 
 	// Allocate memory
 	for (i = 0; i < ARRAY_SIZE(scrub_areas); i++) {
@@ -151,7 +154,7 @@ static void test_autoscrub(const char *name) {
 		printf("\t%p-%p: %zu\n", scrub_area->start,
 			scrub_area->end,
 			cache_desc.c_size_in_cachelines(&cache_desc,
-				scrub_area));
+				scrub_area) << cacheline_width);
 	}
 	printf("]\n");
 	fflush(stdout);
@@ -169,6 +172,10 @@ static void test_autoscrub(const char *name) {
 		fprintf(stderr, "scrub_count != read_count\n");
 		exit(EXIT_FAILURE);
 	}
+	double gigabyte = 1024 * 1024 * 1024;
+	double count = scrub_count * (double)(1 << cacheline_width);
+	double gigabytes_touched = count / gigabyte;
+	printf("Touched %f GB\n", gigabytes_touched);
 }
 #endif
 
