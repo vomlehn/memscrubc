@@ -9,15 +9,19 @@
 #define CACHELINE_ITEMS		8
 
 typedef uint64_t ECCData;
-typedef ECCData Cacheline[CACHELINE_ITEMS];
+typedef struct {
+	ECCData data[CACHELINE_ITEMS];
+} Cacheline;
 
 typedef struct {
-	const uint8_t *start;
-	const uint8_t *end;
+	const void *start;
+	const void *end;
 } ScrubArea;
 
 typedef struct CCacheDesc_s CCacheDesc;
 struct CCacheDesc_s {
+	CCacheDesc *me;
+	size_t cl_width;
 	size_t (*c_cacheline_width)(const CCacheDesc *me);
 	size_t (*c_cacheline_size)(const CCacheDesc *me);
 	size_t (*c_cache_index_width)(const CCacheDesc *me);

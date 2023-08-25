@@ -1,10 +1,13 @@
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "memscrub.h"
 
+#define ARRAY_SIZE(_a)	(sizeof(_a) / sizeof((_a)[0]))
+
 static size_t cacheline_width(const CCacheDesc *me) {
-	return sizeof(Cacheline);
+	return me->cl_width;
 }
 
 static size_t cacheline_size(const CCacheDesc *me) {
@@ -16,22 +19,31 @@ static size_t cache_index_width(const CCacheDesc *me) {
 }
 
 static void read_cacheline(CCacheDesc *me, Cacheline *cacheline) {
-	((volatile Cacheline *)cacheline)[0];
+	volatile ECCData *p = &cacheline->data[0];
+printf("probing %p\n", p);
+	*(volatile char *)p = 0;
+printf(" probe done\n");
+	(void)*p;
 }
 
 static size_t size_in_cachelines(const CCacheDesc *me,
 	const ScrubArea *scrub_area) {
-	size_t start = ((size_t)scrub_area->start) >> me->c_cacheline_width(me);
-	size_t end = ((size_t)scrub_area->end) >> me->c_cacheline_width(me);
+	uintptr_t start = ((uintptr_t)scrub_area->start) >>
+		me->c_cacheline_width(me);
+	uintptr_t end = ((uintptr_t)scrub_area->end) >>
+		me->c_cacheline_width(me);
 	return start - end + 1;
 }
 
 static size_t cache_index(const CCacheDesc *me, const uint8_t *p) {
-	return ((size_t)p >> me->c_cacheline_width(me)) &
+	return ((uintptr_t)p >> me->c_cacheline_width(me)) &
 		((1 << me->c_cache_index_width(me)) - 1);
 }
 
 static CCacheDesc cache_desc = {
+	.me = &cache_desc,
+	.cl_width = sizeof(int) * CHAR_BIT - 1 -
+		__builtin_clz(sizeof(Cacheline)),
 	.c_cacheline_width = cacheline_width,
 	.c_cacheline_size = cacheline_size,
 	.c_cache_index_width = cache_index_width,
@@ -40,19 +52,81 @@ static CCacheDesc cache_desc = {
 	.c_cache_index = cache_index,
 };
 
+typedef struct {
+	size_t	count;
+	CAutoScrubDesc	auto_scrub_desc;
+} TestAutoScrubDesc;
+
 static size_t next(CAutoScrubDesc *me) {
-	return 0;
+	size_t cur_count;
+	size_t delta;
+	const size_t decrement = 2 * sizeof(Cacheline);
+	size_t offset = offsetof(TestAutoScrubDesc, auto_scrub_desc);
+	TestAutoScrubDesc *test_auto_scrub_desc;
+	char *test_auto_scrub_desc_p = ((char *)me - offset);
+       	test_auto_scrub_desc = (TestAutoScrubDesc *)test_auto_scrub_desc_p;
+
+	cur_count = test_auto_scrub_desc->count;
+	delta = cur_count > decrement ? decrement : cur_count;
+	test_auto_scrub_desc->count -= delta;
+printf("next: me %p cur_count %zu delta %zu\n", me, test_auto_scrub_desc->count, delta);
+
+	return delta;
 };
 
-static CAutoScrubDesc auto_scrub_desc = {
-	.next = next,
+static TestAutoScrubDesc test_auto_scrub_desc = {
+	.count = 5 * sizeof(Cacheline),
+	.auto_scrub_desc = {
+		.next = next,
+		.me = &test_auto_scrub_desc.auto_scrub_desc,
+	},
 };
+
+static ScrubArea alloc_mem(size_t size) {
+	ScrubArea scrub_area;
+	void *p;
+
+	p = malloc(size + sizeof(Cacheline));
+	if (p == NULL) {
+		fprintf(stderr, "Cant' allocate %zu bytes\n", size);
+		exit(EXIT_FAILURE);
+	}
+
+printf("alloc_mem at %p\n", p);
+	p = (void *)(((uintptr_t)p + sizeof(Cacheline) - 1) &
+		~(sizeof(Cacheline) - 1));
+printf("alloc_mem at %p\n", p);
+	scrub_area.start = p;
+	scrub_area.end = p + (size - 1);
+printf("probing %p\n", p);
+	*(volatile char *)p = 0;
+printf(" probe done\n");
+	return scrub_area;
+}
 
 int main(int argc, char *argv[]) {
 	AutoScrubResult result;
+	CAutoScrubDesc *auto_scrub_desc;
+	ScrubArea scrub_areas[1];
+
+	size_t size = 2000 * sizeof(Cacheline);
+	scrub_areas[0] = alloc_mem(size);
 	
-	result = autoscrub(&cache_desc, NULL, 0,
-		&auto_scrub_desc);
+	auto_scrub_desc = &test_auto_scrub_desc.auto_scrub_desc;
+	printf("cache_desc %p\n", &cache_desc);
+	printf("cache_desc.cl_width %zu\n", cache_desc.cl_width);
+	printf("scrub_areas [");
+	size_t i;
+	const char *sep = "";
+	for (i = 0; i < ARRAY_SIZE(scrub_areas); i++) {
+		printf("%s%p-%p", sep, scrub_areas[i].start, scrub_areas[i].end);
+		sep = ", ";
+	}
+	printf("]\n");
+
+	printf("auto_scrub_desc %p\n", auto_scrub_desc);
+	result = autoscrub(&cache_desc, scrub_areas, ARRAY_SIZE(scrub_areas),
+		auto_scrub_desc);
 	if (result.is_err) {
 		fprintf(stderr, "%s failed: error %u\n", argv[0],
 			result.error);
@@ -60,28 +134,3 @@ int main(int argc, char *argv[]) {
 	}
 	exit(EXIT_SUCCESS);
 }
-
-/*
-
-#[repr(C)]
-pub struct CAutoScrubDesc {
-    me: *mut CAutoScrubDesc,
-    c_next: extern "C" fn(me: *mut CAutoScrubDesc) -> usize,
-}
-
-impl BaseAutoScrubDesc for CAutoScrubDesc {
-    fn next(&mut self) -> usize {
-        (self.c_next)(self.me)
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn autoscrub(c_cache_desc: &mut CCacheDesc,
-    scrub_areas_ptr: *const ScrubArea, n_scrub_areas: usize,
-    c_auto_scrub_desc: &mut CAutoScrubDesc) -> Result<usize, Error> {
-    let scrub_areas = unsafe {
-        slice::from_raw_parts(scrub_areas_ptr, n_scrub_areas)
-    };
-    BaseAutoScrub::autoscrub(c_cache_desc, &scrub_areas, c_auto_scrub_desc)
-}
-*/
