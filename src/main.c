@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "memscrub.h"
+#include "my-memscrub.h"
 
 #define ARRAY_SIZE(_a)	(sizeof(_a) / sizeof((_a)[0]))
 
@@ -45,8 +45,8 @@ static size_t cache_index_width(const CCacheDesc *me) {
 	return CACHE_INDEX_WIDTH;
 }
 
-static void read_cacheline(CCacheDesc *me, Cacheline *cacheline) {
-	volatile ECCData *p = &cacheline->data[0];
+static void read_cacheline(CCacheDesc *me, const Cacheline *cacheline) {
+	volatile const ECCData *p = &cacheline->data[0];
 	(void)*p;
 	read_count++;
 }
@@ -104,8 +104,8 @@ static size_t next(CAutoScrubDesc *me) {
 static TestAutoScrubDesc test_auto_scrub_desc = {
 	.count = BYTES_TO_SCRUB,
 	.auto_scrub_desc = {
-		.next = next,
 		.me = &test_auto_scrub_desc.auto_scrub_desc,
+		.c_next = next,
 	},
 };
 
@@ -125,7 +125,7 @@ static ScrubArea alloc_mem(size_t size) {
 	p = (void *)(((uintptr_t)p + sizeof(Cacheline) - 1) &
 		~(sizeof(Cacheline) - 1));
 	scrub_area.start = p;
-	scrub_area.end = p + (size - 1);
+	scrub_area.end = (char *)p + (size - 1);
 	*(volatile char *)p = 0;
 	return scrub_area;
 }
