@@ -1,6 +1,17 @@
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <fstream>
+#include <iostream>
 #include <limits.h>
+#include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <vector>
 
 #include "my-memscrub.h"
 
@@ -177,15 +188,153 @@ static void test_autoscrub(const char *name) {
 	double gigabytes_touched = count / gigabyte;
 	printf("Touched %f GB\n", gigabytes_touched);
 }
+#else
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <array>
+
+class ProgramOutput {
+public:
+    explicit ProgramOutput(const std::string& command) {
+        pipe_ = popen(command.c_str(), "r");
+        if (!pipe_) {
+            throw std::runtime_error("Failed to run the command.");
+        }
+    }
+
+    ~ProgramOutput() {
+        if (pipe_) {
+            pclose(pipe_);
+        }
+    }
+
+    std::istream& getStream() {
+        if (!stream_) {
+            stream_ = std::make_unique<std::stringstream>();
+            readOutputIntoStream(*stream_);
+        }
+        return *stream_;
+    }
+
+private:
+    void readOutputIntoStream(std::ostream& stream) {
+        std::array<char, 128> buffer;
+        while (fgets(buffer.data(), buffer.size(), pipe_) != nullptr) {
+            stream << buffer.data();
+        }
+    }
+
+    FILE* pipe_ = nullptr;
+    std::unique_ptr<std::stringstream> stream_;
+};
+
+static std::vector<ScrubArea> read_scrub_areas(void) {
+	std::string command = "../memscrub/extract-memconfig";
+	std::vector<ScrubArea> values;
+
+	try {
+		ProgramOutput pout = ProgramOutput(command);
+		std::istream& outputStream = pout.getStream();
+
+		std::string line;
+		while (std::getline(outputStream, line)) {
+			std::istringstream iss(line);
+			std::string hexValue1, hexValue2;
+
+			if (!(iss >> hexValue1 >> hexValue2)) {
+				exit(EXIT_FAILURE);
+			}
+
+			if (hexValue1.substr(0, 2) != "0x" ||
+				hexValue2.substr(0, 2) != "0x") {
+				std::cerr << "Values must start with '0x': " << line <<
+					std::endl;
+				exit(EXIT_FAILURE);
+			}
+
+			intptr_t value1 = std::strtol(hexValue1.c_str(),
+				nullptr, 16);
+			intptr_t value2 = std::strtol(hexValue2.c_str(),
+				nullptr, 16);
+
+			ScrubArea scrub_area;
+			scrub_area.start = (void *)value1;
+			scrub_area.end = (void *)value2;
+			values.push_back(scrub_area);
+		}
+	} catch (const std::exception& e) {
+		std::cerr << "Unable to read memory configuration: " <<
+			e.what() << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	return values;
+}
+
+static void scrub_dev_mem(void) {
+	std::vector<ScrubArea> phys_scrub_areas;
+
+	phys_scrub_areas = read_scrub_areas();
+
+	// Display the values stored in the vector
+	size_t total_size = 0;
+	std::cout << "Physical addresses:" << std::endl;
+	for (ScrubArea value : phys_scrub_areas) {
+		size_t size = (char *)value.end - (char *)value.start + 1;
+		std::cout << std::hex << value.start << "-" << value.end
+			<< ": " << std::dec << size << std::endl;
+		total_size += size;
+	}
+	std::cout << "total size " << std::dec << total_size << std::endl;
+
+	int fd = open("/dev/mem", O_RDONLY);
+	if (fd == -1) {
+		perror("/dev/mem");
+		exit(EXIT_FAILURE);
+	}
+	std::vector<ScrubArea> virt_scrub_areas;
+
+	for (ScrubArea scrub_area: phys_scrub_areas) {
+		intptr_t start_offset = (intptr_t)scrub_area.start;
+		intptr_t end_offset = (intptr_t)scrub_area.end;
+		size_t length = end_offset - start_offset + 1;
+		int rc = lseek(fd, start_offset, SEEK_SET);
+		if (rc == -1) {
+			perror("seek");
+			exit(EXIT_FAILURE);
+		}
+
+		void *data = mmap(NULL, length, PROT_READ, MAP_SHARED, fd,
+			start_offset);
+		if (data == MAP_FAILED) {
+			perror("mmap");
+			exit(EXIT_FAILURE);
+		}
+
+		intptr_t end = (intptr_t)data + length - 1;
+		ScrubArea virt_scrub_area;
+		virt_scrub_area.start = data;
+		virt_scrub_area.end = (void *)end;
+		virt_scrub_areas.push_back(virt_scrub_area);
+	}
+
+	if (close(fd) == -1) {
+		perror("close");
+		exit(EXIT_FAILURE);
+	}
+}
 #endif
 
 int main(int argc, char *argv[]) {
 #ifdef TEST
 	test_autoscrub(argv[0]);
-#else
-	fprintf(stderr, "%s: TEST is not #defined\n", argv[0]);
-	exit(EXIT_FAILURE);
-#endif
-
 	return EXIT_SUCCESS;
+#else
+	scrub_dev_mem();
+	exit(EXIT_SUCCESS);
+#endif
 }

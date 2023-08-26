@@ -1,6 +1,8 @@
 // For instantiating architecture-specfic objects for the memory
 // scrubbing code
 
+#ifndef _MY_MEMSCRUB_H_
+#define _MY_MEMSCRUB_H_
 #include <stdint.h>
 
 // This are things that I expected cbindgen would generate, but it didn't
@@ -23,3 +25,4 @@ enum Error {
 #include <memscrublib_base.h>
 #include <memscrublib_arch.h>
 #include "memscrub.h"
+#endif /* _MY_MEMSCRUB_H_ */
