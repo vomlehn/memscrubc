@@ -262,8 +262,8 @@ static std::vector<ScrubArea> read_scrub_areas(void) {
 				nullptr, 16);
 
 			ScrubArea scrub_area;
-			scrub_area.start = (void *)value1;
-			scrub_area.end = (void *)value2;
+			scrub_area.start = (uint8_t *)value1;
+			scrub_area.end = (uint8_t *)value2;
 			values.push_back(scrub_area);
 		}
 	} catch (const std::exception& e) {
@@ -317,8 +317,8 @@ static void scrub_dev_mem(void) {
 
 		intptr_t end = (intptr_t)data + length - 1;
 		ScrubArea virt_scrub_area;
-		virt_scrub_area.start = data;
-		virt_scrub_area.end = (void *)end;
+		virt_scrub_area.start = (uint8_t *)data;
+		virt_scrub_area.end = (uint8_t *)end;
 		virt_scrub_areas.push_back(virt_scrub_area);
 	}
 
