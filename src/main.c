@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
-#include "my-memscrub.h"
+#include "memscrublib.h"
 
 #define ARRAY_SIZE(_a)	(sizeof(_a) / sizeof((_a)[0]))
 
@@ -232,9 +232,8 @@ private:
     std::unique_ptr<std::stringstream> stream_;
 };
 
-static std::vector<ScrubArea> read_scrub_areas(void) {
-	std::string command = "../memscrub/extract-memconfig";
-	std::vector<ScrubArea> values;
+static std::vector<ScrubArea> read_scrub_areas(std::string command) {
+	std::vector<ScrubArea> scrub_areas;
 
 	try {
 		ProgramOutput pout = ProgramOutput(command);
@@ -251,47 +250,46 @@ static std::vector<ScrubArea> read_scrub_areas(void) {
 
 			if (hexValue1.substr(0, 2) != "0x" ||
 				hexValue2.substr(0, 2) != "0x") {
-				std::cerr << "Values must start with '0x': " << line <<
-					std::endl;
+				std::cerr << "Values must start with '0x': "
+					<< line << std::endl;
 				exit(EXIT_FAILURE);
 			}
 
-			intptr_t value1 = std::strtol(hexValue1.c_str(),
+			intptr_t start = std::strtol(hexValue1.c_str(),
 				nullptr, 16);
-			intptr_t value2 = std::strtol(hexValue2.c_str(),
+			intptr_t end = std::strtol(hexValue2.c_str(),
 				nullptr, 16);
 
 			ScrubArea scrub_area;
-			scrub_area.start = (uint8_t *)value1;
-			scrub_area.end = (uint8_t *)value2;
-			values.push_back(scrub_area);
+			scrub_area.start = (uint8_t *)start;
+			scrub_area.end = (uint8_t *)end;
+			scrub_areas.push_back(scrub_area);
 		}
 	} catch (const std::exception& e) {
 		std::cerr << "Unable to read memory configuration: " <<
 			e.what() << std::endl;
 		exit(EXIT_FAILURE);
 	}
-
-	return values;
+	
+	return scrub_areas;
 }
 
-static void scrub_dev_mem(void) {
-	std::vector<ScrubArea> phys_scrub_areas;
-
-	phys_scrub_areas = read_scrub_areas();
+static void scrub_dev_mem(std::string dev_mem,
+	std::vector<ScrubArea> phys_scrub_areas) {
 
 	// Display the values stored in the vector
 	size_t total_size = 0;
 	std::cout << "Physical addresses:" << std::endl;
 	for (ScrubArea value : phys_scrub_areas) {
 		size_t size = (char *)value.end - (char *)value.start + 1;
-		std::cout << std::hex << value.start << "-" << value.end
-			<< ": " << std::dec << size << std::endl;
+		std::cout << std::hex << (void *)value.start << "-"
+			<< (void *)value.end << ": " << std::dec <<
+			size << std::endl;
 		total_size += size;
 	}
 	std::cout << "total size " << std::dec << total_size << std::endl;
 
-	int fd = open("/dev/mem", O_RDONLY);
+	int fd = open(dev_mem.c_str(), O_RDONLY);
 	if (fd == -1) {
 		perror("/dev/mem");
 		exit(EXIT_FAILURE);
@@ -334,7 +332,11 @@ int main(int argc, char *argv[]) {
 	test_autoscrub(argv[0]);
 	return EXIT_SUCCESS;
 #else
-	scrub_dev_mem();
+	std::string dev_mem = "/dev/mem";
+	std::string command = "../memscrub/extract-memconfig";
+
+	std::vector<ScrubArea> phys_scrub_areas = read_scrub_areas(command);
+	scrub_dev_mem(dev_mem, phys_scrub_areas);
 	exit(EXIT_SUCCESS);
 #endif
 }
